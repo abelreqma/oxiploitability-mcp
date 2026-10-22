@@ -1,0 +1,277 @@
+name: release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1 (stable)
+        with:
+          toolchain: 1.98.1
+          components: rustfmt, clippy
+      - run: python -m unittest discover -s mcpb -p 'test_*.py'
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --locked
+      - run: cargo build --release --locked
+      - run: cargo package --locked
+      - run: cargo publish --dry-run --locked
+      - name: Validate MCP Registry manifest
+        env:
+          PUBLISHER_URL: https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz
+          PUBLISHER_SHA256: a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc
+        run: |
+          curl -fsSL --retry 3 -o mcp-publisher.tar.gz "$PUBLISHER_URL"
+          echo "$PUBLISHER_SHA256  mcp-publisher.tar.gz" | sha256sum -c -
+          tar xzf mcp-publisher.tar.gz mcp-publisher
+          ./mcp-publisher validate
+
+  msrv:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: 1.89.0
+      - run: cargo check --locked
+
+  create-release:
+    needs: [verify, msrv]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check that every manifest carries the tag version
+        run: |
+          if [[ "$GITHUB_REF" != refs/tags/v* ]]; then
+            echo "run this workflow on a v* tag" >&2
+            exit 1
+          fi
+          tag="${GITHUB_REF_NAME#v}"
+          crate=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          for v in "$crate" "$(jq -r .version server.json)" "$(jq -r '.packages[0].version' server.json)" "$(jq -r .version mcpb/manifest.json)"; do
+            if [ "$v" != "$tag" ]; then
+              echo "version $v does not match tag $tag" >&2
+              exit 1
+            fi
+          done
+      - uses: taiki-e/create-gh-release-action@eba8ea96c86cca8a37f1b56e94b4d13301fba651 # v1.11.0
+        with:
+          draft: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    needs: create-release
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-15
+          - target: x86_64-apple-darwin
+            os: macos-15-intel
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-24.04
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+          - target: x86_64-pc-windows-msvc
+            os: windows-2025
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1 (stable)
+        with:
+          toolchain: 1.98.1
+          targets: ${{ matrix.target }}
+      - id: binary
+        uses: taiki-e/upload-rust-binary-action@f0d45ae91ee7b8ee928de7a9d04d893a08bcbec6 # v1.30.2
+        with:
+          bin: oxiploitability
+          archive: oxiploitability-mcp-$target
+          target: ${{ matrix.target }}
+          locked: true
+          tar: unix
+          zip: windows
+          checksum: sha256
+          dry-run: true
+      - name: Smoke test and upload
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ARCHIVE_TAR: ${{ steps.binary.outputs.tar }}
+          ARCHIVE_ZIP: ${{ steps.binary.outputs.zip }}
+          CHECKSUM: ${{ steps.binary.outputs.sha256 }}
+        run: |
+          binary="target/${{ matrix.target }}/release/oxiploitability"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then binary="$binary.exe"; fi
+          python mcpb/smoke.py "$binary"
+          archive="${ARCHIVE_TAR:-$ARCHIVE_ZIP}"
+          test -s "$archive"
+          test -s "$CHECKSUM"
+          gh release upload "$GITHUB_REF_NAME" "$archive" "$CHECKSUM"
+
+  mcpb:
+    needs: create-release
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: darwin
+            arch: universal
+            os: macos-15
+            targets: aarch64-apple-darwin,x86_64-apple-darwin
+            ext: ""
+          - platform: linux
+            arch: x86_64
+            os: ubuntu-24.04
+            targets: x86_64-unknown-linux-gnu
+            ext: ""
+          - platform: linux
+            arch: aarch64
+            os: ubuntu-24.04-arm
+            targets: aarch64-unknown-linux-gnu
+            ext: ""
+          - platform: win32
+            arch: x86_64
+            os: windows-2025
+            targets: x86_64-pc-windows-msvc
+            ext: .exe
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      PLATFORM: ${{ matrix.platform }}
+      ARCH: ${{ matrix.arch }}
+      TARGETS: ${{ matrix.targets }}
+      EXT: ${{ matrix.ext }}
+      PYTHON: python
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1 (stable)
+        with:
+          toolchain: 1.98.1
+          targets: ${{ matrix.targets }}
+      - name: Build
+        run: |
+          for t in ${TARGETS//,/ }; do
+            cargo build --release --locked --target "$t"
+          done
+      - name: Pack and upload the bundle
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          bins=()
+          for t in ${TARGETS//,/ }; do
+            bins+=("target/$t/release/oxiploitability$EXT")
+          done
+          mcpb/stage.sh "$PLATFORM" bundle "${bins[@]}"
+          python mcpb/smoke.py "bundle/server/oxiploitability$EXT"
+          out="oxiploitability-mcp-$PLATFORM-$ARCH.mcpb"
+          python mcpb/pack.py bundle "$out"
+          if command -v sha256sum > /dev/null; then
+            sha256sum "$out" > "$out.sha256"
+          else
+            shasum -a 256 "$out" > "$out.sha256"
+          fi
+          gh release upload "$GITHUB_REF_NAME" "$out" "$out.sha256"
+
+  verify-assets:
+    needs: [build, mcpb]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
+        with:
+          python-version: '3.12'
+      - name: Verify every staged release asset before publication
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download "$GITHUB_REF_NAME" --dir release-assets
+          python mcpb/check_release_assets.py release-assets
+
+  publish-crate:
+    needs: verify-assets
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1 (stable)
+        with:
+          toolchain: 1.98.1
+      - run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  publish-registry:
+    needs: publish-crate
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PUBLISHER_URL: https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz
+      PUBLISHER_SHA256: a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install mcp-publisher
+        run: |
+          curl -fsSL --retry 3 -o mcp-publisher.tar.gz "$PUBLISHER_URL"
+          echo "$PUBLISHER_SHA256  mcp-publisher.tar.gz" | sha256sum -c -
+          tar xzf mcp-publisher.tar.gz mcp-publisher
+      - name: Wait for crates.io to serve the new version
+        run: |
+          url="https://crates.io/api/v1/crates/oxiploitability-mcp/${GITHUB_REF_NAME#v}"
+          for _ in $(seq 1 20); do
+            if curl -fsS -o /dev/null -A "oxiploitability-release ($GITHUB_REPOSITORY)" "$url"; then
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "crates.io does not list $url" >&2
+          exit 1
+      - run: ./mcp-publisher login github-oidc
+      - run: ./mcp-publisher publish
+
+  finalize-release:
+    needs: publish-registry
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
+        with:
+          python-version: '3.12'
+      - name: Verify every release asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download "$GITHUB_REF_NAME" --dir release-assets
+          python mcpb/check_release_assets.py release-assets
+      - name: Publish the complete GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false

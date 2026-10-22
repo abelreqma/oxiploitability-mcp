@@ -1,0 +1,94 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1 (stable)
+        with:
+          toolchain: 1.98.1
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: python -m unittest discover -s mcpb -p 'test_*.py'
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --locked
+      - run: cargo build --release --locked
+      - run: cargo package --locked
+      - run: cargo publish --dry-run --locked
+
+  msrv:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: 1.89.0
+      - run: cargo check --locked
+
+  bundles:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: darwin
+            arch: universal
+            os: macos-15
+            targets: aarch64-apple-darwin,x86_64-apple-darwin
+            ext: ""
+          - platform: linux
+            arch: x86_64
+            os: ubuntu-24.04
+            targets: x86_64-unknown-linux-gnu
+            ext: ""
+          - platform: linux
+            arch: aarch64
+            os: ubuntu-24.04-arm
+            targets: aarch64-unknown-linux-gnu
+            ext: ""
+          - platform: win32
+            arch: x86_64
+            os: windows-2025
+            targets: x86_64-pc-windows-msvc
+            ext: .exe
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      PLATFORM: ${{ matrix.platform }}
+      ARCH: ${{ matrix.arch }}
+      TARGETS: ${{ matrix.targets }}
+      EXT: ${{ matrix.ext }}
+      PYTHON: python
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1 (stable)
+        with:
+          toolchain: 1.98.1
+          targets: ${{ matrix.targets }}
+      - name: Build and smoke test bundle
+        run: |
+          bins=()
+          for t in ${TARGETS//,/ }; do
+            cargo build --release --locked --target "$t"
+            bins+=("target/$t/release/oxiploitability$EXT")
+          done
+          mcpb/stage.sh "$PLATFORM" bundle "${bins[@]}"
+          python mcpb/smoke.py "bundle/server/oxiploitability$EXT"
+          python mcpb/pack.py bundle "oxiploitability-mcp-$PLATFORM-$ARCH.mcpb"

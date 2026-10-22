@@ -1,0 +1,65 @@
+{
+  "manifest_version": "0.3",
+  "name": "oxiploitability-mcp",
+  "display_name": "Oxiploitability",
+  "version": "0.1.0",
+  "description": "Sourced, evidence-aware CVE research from NVD, EPSS, KEV, OSV.dev and CVE.org.",
+  "long_description": "Look up how exploitable a CVE is. From the NIST NVD: description, every CVSS score with its attack vector, privileges and user interaction, CISA's SSVC decision (exploitation none, poc or active), CWEs, affected products with version ranges, and references with exploit links first. From FIRST EPSS: the probability of exploitation in the next 30 days. From CISA KEV: whether the CVE is known exploited, with the due date and ransomware use. It also lists the CVEs affecting a product, package, vulnerability nickname, SBOM, lockfile or container image, using NVD, OSV.dev and CVE.org, ranked by KEV status and EPSS. Every finding names its source and links to its record, so answers can be cited. Runs locally; an optional NVD API key raises the NVD rate limit. This product uses the NVD API but is not endorsed or certified by the NVD.",
+  "author": {
+    "name": "Abel Maldonado Requena",
+    "url": "https://github.com/abelreqma"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/abelreqma/oxiploitability-mcp"
+  },
+  "license": "MIT OR Apache-2.0",
+  "privacy_policies": [
+    "https://github.com/abelreqma/oxiploitability-mcp/blob/main/PRIVACY.md",
+    "https://www.nist.gov/admr/oism/site-privacy",
+    "https://www.first.org/about/policies/privacy",
+    "https://www.cisa.gov/privacy-policy",
+    "https://policies.google.com/privacy",
+    "https://www.cve.org/legal/privacypolicy",
+    "https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement"
+  ],
+  "keywords": ["cve", "nvd", "epss", "kev", "vulnerability", "security"],
+  "server": {
+    "type": "binary",
+    "entry_point": "server/oxiploitability",
+    "mcp_config": {
+      "command": "${__dirname}/server/oxiploitability",
+      "args": [],
+      "env": {
+        "NVD_API": "${user_config.nvd_api_key}"
+      },
+      "platform_overrides": {
+        "win32": {
+          "command": "${__dirname}/server/oxiploitability.exe"
+        }
+      }
+    }
+  },
+  "tools": [
+    { "name": "nvd_cve", "description": "Fetch one CVE record from the NIST NVD." },
+    { "name": "epss_scores", "description": "Fetch FIRST EPSS scores for up to 100 CVEs." },
+    { "name": "kev_lookup", "description": "Check up to 100 CVEs against the CISA KEV catalog." },
+    { "name": "enrich_cve", "description": "Score one CVE from NVD, EPSS and KEV at once." },
+    { "name": "product_cves", "description": "List CVEs affecting a product or package, with KEV and EPSS." },
+    { "name": "scan_sbom", "description": "Check every component of an SBOM, lockfile or container image for CVEs." },
+    { "name": "poc_search", "description": "Find public proof-of-concept repositories on GitHub for a CVE." }
+  ],
+  "user_config": {
+    "nvd_api_key": {
+      "type": "string",
+      "title": "NVD API key",
+      "description": "Optional. Raises the NVD rate limit from 5 to 50 requests per 30 seconds. Request one at https://nvd.nist.gov/developers/request-an-api-key",
+      "sensitive": true,
+      "required": false,
+      "default": ""
+    }
+  },
+  "compatibility": {
+    "platforms": ["darwin", "linux", "win32"]
+  }
+}

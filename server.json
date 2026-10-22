@@ -1,0 +1,28 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.abelreqma/oxiploitability-mcp",
+  "title": "Oxiploitability",
+  "description": "Sourced, evidence-aware CVE research for CVEs, products, SBOMs and images via NVD, EPSS, KEV, OSV.",
+  "repository": {
+    "url": "https://github.com/abelreqma/oxiploitability-mcp",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "cargo",
+      "identifier": "oxiploitability-mcp",
+      "version": "0.1.0",
+      "transport": { "type": "stdio" },
+      "environmentVariables": [
+        {
+          "name": "NVD_API",
+          "description": "Optional NVD API key. Raises the NVD rate limit from 5 to 50 requests per 30 seconds.",
+          "isRequired": false,
+          "isSecret": true,
+          "format": "string"
+        }
+      ]
+    }
+  ]
+}
