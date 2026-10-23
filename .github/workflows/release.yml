@@ -200,7 +200,7 @@ jobs:
     needs: [build, mcpb]
     runs-on: ubuntu-24.04
     permissions:
-      contents: read
+      contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
